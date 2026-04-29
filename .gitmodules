@@ -1,0 +1,4 @@
+[submodule "batch-gateway"]
+	path = batch-gateway
+	url = https://github.com/opendatahub-io/batch-gateway.git
+	branch = main

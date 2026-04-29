@@ -1,0 +1,95 @@
+IMG ?= ghcr.io/llm-d-incubation/batch-gw-operator:latest
+CONTROLLER_GEN ?= go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.17.3
+ENVTEST ?= go run sigs.k8s.io/controller-runtime/tools/setup-envtest@release-0.21
+ENVTEST_K8S_VERSION ?= 1.33.0
+LOCALBIN ?= $(shell pwd)/bin/k8s
+
+## Build
+
+.PHONY: build
+build:
+	go build -o bin/manager ./cmd/
+
+## Code Generation
+
+.PHONY: manifests
+manifests:
+	$(CONTROLLER_GEN) rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+
+.PHONY: generate
+generate:
+	$(CONTROLLER_GEN) object paths="./..."
+
+## Test
+
+.PHONY: test
+test: generate manifests setup-envtest
+	KUBEBUILDER_ASSETS="$$($(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" \
+	go test ./... -race -count=1
+
+.PHONY: setup-envtest
+setup-envtest:
+	$(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN)
+
+## Container
+
+CONTAINER_TOOL ?= $(shell command -v docker 2>/dev/null || command -v podman 2>/dev/null)
+
+.PHONY: docker-build
+docker-build:
+	$(CONTAINER_TOOL) build -t $(IMG) -f Dockerfile .
+
+.PHONY: docker-push
+docker-push:
+	$(CONTAINER_TOOL) push $(IMG)
+
+## Install
+
+.PHONY: install
+install: manifests
+	kubectl apply -f config/crd/bases/
+
+.PHONY: uninstall
+uninstall:
+	kubectl delete -f config/crd/bases/
+
+## Deploy (kustomize)
+
+.PHONY: deploy
+deploy: manifests
+	cd config/default && kustomize edit set image controller=$(IMG)
+	kubectl apply -k config/default
+
+.PHONY: undeploy
+undeploy:
+	kubectl delete -k config/default --ignore-not-found
+
+## Dev (Kind)
+
+KIND_CLUSTER_NAME ?= batch-gateway-dev
+
+.PHONY: dev-deploy
+dev-deploy:
+	hack/dev-deploy.sh
+
+.PHONY: dev-clean
+dev-clean:
+	hack/dev-clean.sh
+
+.PHONY: dev-rm-cluster
+dev-rm-cluster:
+	kind delete cluster --name $(KIND_CLUSTER_NAME)
+
+# TODO: enable more e2e tests (currently only running Batches/Lifecycle as a smoke test)
+TEST_RUN ?= TestE2E/Batches/Lifecycle
+
+.PHONY: test-e2e
+test-e2e:
+	cd batch-gateway/test/e2e && go test -v -count=1 -run "$(TEST_RUN)" ./...
+
+## Submodule
+
+.PHONY: update-submodule
+update-submodule:
+	git submodule update --remote batch-gateway
+

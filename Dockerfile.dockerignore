@@ -1,0 +1,14 @@
+.git
+*.md
+LICENSE
+.github
+.vscode
+.idea
+bin/
+*_test.go
+testdata/
+coverage.*
+scripts/
+test/
+examples/
+.DS_Store

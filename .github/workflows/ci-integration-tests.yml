@@ -1,0 +1,58 @@
+name: Integration Tests
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+    paths:
+      - '.github/**'
+      - 'cmd/**'
+      - 'api/**'
+      - 'internal/**'
+      - 'config/**'
+      - 'hack/**'
+      - 'Dockerfile'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Makefile'
+
+env:
+  OPERATOR_IMG: "localhost/batch-gw-operator:ci"
+  KIND_CLUSTER_NAME: "batch-gateway-ci"
+
+jobs:
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install Kind
+        run: go install sigs.k8s.io/kind@latest
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Deploy dev environment
+        run: make dev-deploy
+        env:
+          OPERATOR_IMG: ${{ env.OPERATOR_IMG }}
+          KIND_CLUSTER_NAME: ${{ env.KIND_CLUSTER_NAME }}
+
+      - name: Run integration tests
+        run: make test-e2e
+        env:
+          TEST_APISERVER_URL: "http://localhost:8000"
+
+      - name: Cleanup
+        if: always()
+        run: kind delete cluster --name ${{ env.KIND_CLUSTER_NAME }}

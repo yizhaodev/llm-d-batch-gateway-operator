@@ -320,15 +320,15 @@ func specToHelmValues(gw *batchv1alpha1.LLMBatchGateway) (map[string]interface{}
 	return vals, nil
 }
 
-// splitImage splits "repo:tag" into (repo, tag). If no tag, returns "latest".
+// splitImage splits an image reference into (repository, tag).
+// For digest references like "repo@sha256:abc", it splits on the last ":"
+// producing ("repo@sha256", "abc"). The chart template reconstructs this
+// via printf "%s:%s" back into the correct "repo@sha256:abc" format.
 func splitImage(image string) (string, string) {
-	// Handle images with registry port like ghcr.io:443/org/repo:tag
-	// Split on the last ":"
 	lastColon := strings.LastIndex(image, ":")
 	if lastColon == -1 {
 		return image, "latest"
 	}
-	// If the part after the last colon contains a "/", it's a port not a tag
 	afterColon := image[lastColon+1:]
 	if strings.Contains(afterColon, "/") {
 		return image, "latest"

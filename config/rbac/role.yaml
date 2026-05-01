@@ -48,8 +48,6 @@ rules:
   resources:
   - llmbatchgateways
   verbs:
-  - create
-  - delete
   - get
   - list
   - patch

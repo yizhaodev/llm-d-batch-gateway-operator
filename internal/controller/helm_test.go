@@ -48,10 +48,22 @@ func TestSplitImage(t *testing.T) {
 			wantTag:  "latest",
 		},
 		{
-			name:     "image with sha digest",
+			name:     "image with sha tag prefix",
 			image:    "ghcr.io/llm-d-incubation/batch-gateway-apiserver:sha-abc123",
 			wantRepo: "ghcr.io/llm-d-incubation/batch-gateway-apiserver",
 			wantTag:  "sha-abc123",
+		},
+		{
+			name:     "digest splits so chart reconstructs repo@sha256:hex correctly",
+			image:    "ghcr.io/llm-d-incubation/batch-gateway-apiserver@sha256:abc123def456",
+			wantRepo: "ghcr.io/llm-d-incubation/batch-gateway-apiserver@sha256",
+			wantTag:  "abc123def456",
+		},
+		{
+			name:     "digest with registry port",
+			image:    "registry.example.com:5000/batch-gateway-apiserver@sha256:abc123def456",
+			wantRepo: "registry.example.com:5000/batch-gateway-apiserver@sha256",
+			wantTag:  "abc123def456",
 		},
 	}
 

@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -9,12 +10,14 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	batchv1alpha1 "github.com/opendatahub-io/llm-d-batch-gateway-operator/api/v1alpha1"
 )
@@ -27,7 +30,25 @@ const (
 	fieldOwner = "llmbatchgateway-controller"
 )
 
-// +kubebuilder:rbac:groups=batch.llm-d.ai,resources=llmbatchgateways,verbs=get;list;watch;create;update;patch;delete
+var managedGVKs = []schema.GroupVersionKind{
+	{Group: "apps", Version: "v1", Kind: "Deployment"},
+	{Group: "", Version: "v1", Kind: "Service"},
+	{Group: "", Version: "v1", Kind: "ConfigMap"},
+	{Group: "", Version: "v1", Kind: "ServiceAccount"},
+	{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"},
+	{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "HTTPRoute"},
+	{Group: "monitoring.coreos.com", Version: "v1", Kind: "ServiceMonitor"},
+	{Group: "monitoring.coreos.com", Version: "v1", Kind: "PodMonitor"},
+	{Group: "monitoring.coreos.com", Version: "v1", Kind: "PrometheusRule"},
+}
+
+type resourceKey struct {
+	Group string
+	Kind  string
+	Name  string
+}
+
+// +kubebuilder:rbac:groups=batch.llm-d.ai,resources=llmbatchgateways,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=batch.llm-d.ai,resources=llmbatchgateways/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=batch.llm-d.ai,resources=llmbatchgateways/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
@@ -53,6 +74,22 @@ func (r *LLMBatchGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("fetching LLMBatchGateway: %w", err)
+	}
+
+	if err := validateSpec(&gw); err != nil {
+		for _, condType := range []string{ConditionReady, ConditionAPIServerAvailable, ConditionProcessorAvailable} {
+			meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+				Type:               condType,
+				Status:             metav1.ConditionFalse,
+				Reason:             "ValidationFailed",
+				Message:            err.Error(),
+				ObservedGeneration: gw.Generation,
+			})
+		}
+		if statusErr := r.Status().Update(ctx, &gw); statusErr != nil {
+			logger.Error(statusErr, "failed to update status after validation failure")
+		}
+		return ctrl.Result{}, nil
 	}
 
 	objects, err := r.HelmRenderer.RenderChart(&gw)
@@ -87,11 +124,79 @@ func (r *LLMBatchGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		logger.V(2).Info("applied resource", "kind", obj.GetKind(), "name", obj.GetName())
 	}
 
+	if err := r.deleteOrphanedResources(ctx, &gw, objects); err != nil {
+		return ctrl.Result{}, fmt.Errorf("deleting orphaned resources: %w", err)
+	}
+
 	if err := r.updateStatus(ctx, &gw); err != nil {
 		return ctrl.Result{}, fmt.Errorf("updating status: %w", err)
 	}
 
 	return ctrl.Result{}, nil
+}
+
+func (r *LLMBatchGatewayReconciler) deleteOrphanedResources(
+	ctx context.Context,
+	gw *batchv1alpha1.LLMBatchGateway,
+	renderedObjects []*unstructured.Unstructured,
+) error {
+	logger := log.FromContext(ctx)
+
+	desired := make(map[resourceKey]struct{}, len(renderedObjects))
+	for _, obj := range renderedObjects {
+		gvk := obj.GroupVersionKind()
+		desired[resourceKey{
+			Group: gvk.Group,
+			Kind:  gvk.Kind,
+			Name:  obj.GetName(),
+		}] = struct{}{}
+	}
+
+	var errs []error
+	for _, gvk := range managedGVKs {
+		var list unstructured.UnstructuredList
+		list.SetGroupVersionKind(schema.GroupVersionKind{
+			Group:   gvk.Group,
+			Version: gvk.Version,
+			Kind:    gvk.Kind + "List",
+		})
+
+		// TODO: use client.MatchingLabels for GVKs that have consistent labels to reduce API server load
+		if err := r.List(ctx, &list, client.InNamespace(gw.Namespace)); err != nil {
+			if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
+				logger.V(1).Info("skipping orphan check (CRD not installed)", "kind", gvk.Kind)
+				continue
+			}
+			errs = append(errs, fmt.Errorf("listing %s: %w", gvk.Kind, err))
+			continue
+		}
+
+		for i := range list.Items {
+			item := &list.Items[i]
+			if !isControllerOwnedBy(item, gw) {
+				continue
+			}
+
+			key := resourceKey{
+				Group: gvk.Group,
+				Kind:  gvk.Kind,
+				Name:  item.GetName(),
+			}
+			if _, ok := desired[key]; ok {
+				continue
+			}
+
+			logger.Info("deleting orphaned resource", "kind", gvk.Kind, "name", item.GetName())
+			if err := r.Delete(ctx, item); err != nil {
+				if apierrors.IsNotFound(err) {
+					continue
+				}
+				errs = append(errs, fmt.Errorf("deleting %s/%s: %w", gvk.Kind, item.GetName(), err))
+			}
+		}
+	}
+
+	return errors.Join(errs...)
 }
 
 func (r *LLMBatchGatewayReconciler) updateStatus(ctx context.Context, gw *batchv1alpha1.LLMBatchGateway) error {
@@ -169,6 +274,19 @@ func (r *LLMBatchGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
+func isControllerOwnedBy(obj metav1.Object, owner *batchv1alpha1.LLMBatchGateway) bool {
+	for _, ref := range obj.GetOwnerReferences() {
+		if ref.UID == owner.UID &&
+			ref.Kind == "LLMBatchGateway" &&
+			ref.APIVersion == batchv1alpha1.GroupVersion.String() &&
+			ref.Controller != nil &&
+			*ref.Controller {
+			return true
+		}
+	}
+	return false
+}
+
 func isOwnedBy(obj metav1.Object, owner *batchv1alpha1.LLMBatchGateway) bool {
 	for _, ref := range obj.GetOwnerReferences() {
 		if ref.UID == owner.UID {
@@ -190,6 +308,18 @@ func conditionReason(ok bool, trueReason, falseReason string) string {
 		return trueReason
 	}
 	return falseReason
+}
+
+func validateSpec(gw *batchv1alpha1.LLMBatchGateway) error {
+	hasGlobal := gw.Spec.Processor.GlobalInferenceGateway != nil
+	hasModel := len(gw.Spec.Processor.ModelGateways) > 0
+	if !hasGlobal && !hasModel {
+		return fmt.Errorf("processor must have either globalInferenceGateway or modelGateways configured")
+	}
+	if hasGlobal && hasModel {
+		return fmt.Errorf("processor cannot have both globalInferenceGateway and modelGateways configured")
+	}
+	return nil
 }
 
 var _ reconcile.Reconciler = (*LLMBatchGatewayReconciler)(nil)

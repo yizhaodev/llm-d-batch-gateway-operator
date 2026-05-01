@@ -270,6 +270,218 @@ func TestReconcile(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("deletes orphaned resources on spec change", func(t *testing.T) {
+		gw := newTestGateway("test-orphan", "default")
+		gw.Spec.Grafana = &batchv1alpha1.GrafanaSpec{Enabled: true}
+		if err := k8sClient.Create(ctx, gw); err != nil {
+			t.Fatalf("creating CR: %v", err)
+		}
+		t.Cleanup(func() {
+			_ = k8sClient.Delete(ctx, gw)
+		})
+
+		nn := types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace}
+
+		_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+		if err != nil {
+			t.Fatalf("first Reconcile() error: %v", err)
+		}
+
+		var cmList corev1.ConfigMapList
+		if err := k8sClient.List(ctx, &cmList); err != nil {
+			t.Fatalf("listing configmaps: %v", err)
+		}
+		cmCountBefore := 0
+		hasDashboard := false
+		for _, cm := range cmList.Items {
+			if !isOwnedByUID(cm.OwnerReferences, gw.UID) {
+				continue
+			}
+			cmCountBefore++
+			if cm.Labels["grafana_dashboard"] == "1" {
+				hasDashboard = true
+			}
+		}
+		if !hasDashboard {
+			t.Fatal("expected grafana dashboard ConfigMap to exist after first reconcile")
+		}
+
+		if err := k8sClient.Get(ctx, nn, gw); err != nil {
+			t.Fatalf("getting CR for update: %v", err)
+		}
+		gw.Spec.Grafana = &batchv1alpha1.GrafanaSpec{Enabled: false}
+		if err := k8sClient.Update(ctx, gw); err != nil {
+			t.Fatalf("updating CR: %v", err)
+		}
+
+		_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+		if err != nil {
+			t.Fatalf("second Reconcile() error: %v", err)
+		}
+
+		if err := k8sClient.List(ctx, &cmList); err != nil {
+			t.Fatalf("listing configmaps after: %v", err)
+		}
+		cmCountAfter := 0
+		for _, cm := range cmList.Items {
+			if !isOwnedByUID(cm.OwnerReferences, gw.UID) {
+				continue
+			}
+			cmCountAfter++
+			if cm.Labels["grafana_dashboard"] == "1" {
+				t.Error("grafana dashboard ConfigMap should have been deleted")
+			}
+		}
+		if cmCountAfter != cmCountBefore-1 {
+			t.Errorf("configmap count = %d, want %d (one dashboard removed)", cmCountAfter, cmCountBefore-1)
+		}
+	})
+
+	t.Run("sets ValidationFailed when no inference gateway configured", func(t *testing.T) {
+		gw := newTestGateway("test-validation-none", "default")
+		gw.Spec.Processor.GlobalInferenceGateway = nil
+		gw.Spec.Processor.ModelGateways = nil
+		if err := k8sClient.Create(ctx, gw); err != nil {
+			t.Fatalf("creating CR: %v", err)
+		}
+		t.Cleanup(func() {
+			_ = k8sClient.Delete(ctx, gw)
+		})
+
+		_, err := reconciler.Reconcile(ctx, reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace},
+		})
+		if err != nil {
+			t.Fatalf("Reconcile() should not return error for validation failure, got: %v", err)
+		}
+
+		var updated batchv1alpha1.LLMBatchGateway
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace}, &updated); err != nil {
+			t.Fatalf("getting updated CR: %v", err)
+		}
+
+		for _, condType := range []string{ConditionReady, ConditionAPIServerAvailable, ConditionProcessorAvailable} {
+			found := false
+			for _, c := range updated.Status.Conditions {
+				if c.Type == condType {
+					found = true
+					if c.Status != metav1.ConditionFalse {
+						t.Errorf("%s status = %v, want False", condType, c.Status)
+					}
+					if c.Reason != "ValidationFailed" {
+						t.Errorf("%s reason = %v, want ValidationFailed", condType, c.Reason)
+					}
+					break
+				}
+			}
+			if !found {
+				t.Errorf("missing condition %s", condType)
+			}
+		}
+	})
+
+	t.Run("sets ValidationFailed when both gateways configured", func(t *testing.T) {
+		gw := newTestGateway("test-validation-both", "default")
+		gw.Spec.Processor.GlobalInferenceGateway = &batchv1alpha1.InferenceGatewaySpec{
+			URL: "http://global:8000",
+		}
+		gw.Spec.Processor.ModelGateways = map[string]batchv1alpha1.InferenceGatewaySpec{
+			"model-a": {URL: "http://model-a:8000"},
+		}
+		if err := k8sClient.Create(ctx, gw); err != nil {
+			t.Fatalf("creating CR: %v", err)
+		}
+		t.Cleanup(func() {
+			_ = k8sClient.Delete(ctx, gw)
+		})
+
+		_, err := reconciler.Reconcile(ctx, reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace},
+		})
+		if err != nil {
+			t.Fatalf("Reconcile() should not return error for validation failure, got: %v", err)
+		}
+
+		var updated batchv1alpha1.LLMBatchGateway
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace}, &updated); err != nil {
+			t.Fatalf("getting updated CR: %v", err)
+		}
+
+		for _, c := range updated.Status.Conditions {
+			if c.Type == ConditionReady {
+				if c.Status != metav1.ConditionFalse {
+					t.Errorf("Ready status = %v, want False", c.Status)
+				}
+				if c.Reason != "ValidationFailed" {
+					t.Errorf("Ready reason = %v, want ValidationFailed", c.Reason)
+				}
+				return
+			}
+		}
+		t.Error("missing Ready condition")
+	})
+
+	t.Run("does not delete resources owned by a different CR", func(t *testing.T) {
+		gwA := newTestGateway("test-orphan-a", "default")
+		gwA.Spec.Grafana = &batchv1alpha1.GrafanaSpec{Enabled: true}
+		gwB := newTestGateway("test-orphan-b", "default")
+		gwB.Spec.Grafana = &batchv1alpha1.GrafanaSpec{Enabled: true}
+
+		if err := k8sClient.Create(ctx, gwA); err != nil {
+			t.Fatalf("creating CR A: %v", err)
+		}
+		t.Cleanup(func() { _ = k8sClient.Delete(ctx, gwA) })
+		if err := k8sClient.Create(ctx, gwB); err != nil {
+			t.Fatalf("creating CR B: %v", err)
+		}
+		t.Cleanup(func() { _ = k8sClient.Delete(ctx, gwB) })
+
+		nnA := types.NamespacedName{Name: gwA.Name, Namespace: gwA.Namespace}
+		nnB := types.NamespacedName{Name: gwB.Name, Namespace: gwB.Namespace}
+
+		if _, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nnA}); err != nil {
+			t.Fatalf("Reconcile A: %v", err)
+		}
+		if _, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nnB}); err != nil {
+			t.Fatalf("Reconcile B: %v", err)
+		}
+
+		var cmList corev1.ConfigMapList
+		if err := k8sClient.List(ctx, &cmList); err != nil {
+			t.Fatalf("listing configmaps: %v", err)
+		}
+		cmCountB := 0
+		for _, cm := range cmList.Items {
+			if isOwnedByUID(cm.OwnerReferences, gwB.UID) {
+				cmCountB++
+			}
+		}
+
+		if err := k8sClient.Get(ctx, nnA, gwA); err != nil {
+			t.Fatalf("getting CR A: %v", err)
+		}
+		gwA.Spec.Grafana = &batchv1alpha1.GrafanaSpec{Enabled: false}
+		if err := k8sClient.Update(ctx, gwA); err != nil {
+			t.Fatalf("updating CR A: %v", err)
+		}
+		if _, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nnA}); err != nil {
+			t.Fatalf("Reconcile A after update: %v", err)
+		}
+
+		if err := k8sClient.List(ctx, &cmList); err != nil {
+			t.Fatalf("listing configmaps after: %v", err)
+		}
+		cmCountBAfter := 0
+		for _, cm := range cmList.Items {
+			if isOwnedByUID(cm.OwnerReferences, gwB.UID) {
+				cmCountBAfter++
+			}
+		}
+		if cmCountBAfter != cmCountB {
+			t.Errorf("CR B configmap count changed from %d to %d", cmCountB, cmCountBAfter)
+		}
+	})
 }
 
 func isOwnedByUID(refs []metav1.OwnerReference, uid types.UID) bool {

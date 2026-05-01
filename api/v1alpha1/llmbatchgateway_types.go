@@ -54,8 +54,6 @@ type LLMBatchGatewaySpec struct {
 type SecretReference struct {
 	// +kubebuilder:validation:Required
 	Name string `json:"name"`
-
-	Namespace string `json:"namespace,omitempty"`
 }
 
 // --- File Storage ---

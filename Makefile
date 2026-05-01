@@ -25,7 +25,7 @@ generate:
 .PHONY: test
 test: generate manifests setup-envtest
 	KUBEBUILDER_ASSETS="$$($(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" \
-	go test ./... -race -count=1
+	go test -v ./... -race -count=1
 
 .PHONY: setup-envtest
 setup-envtest:
@@ -83,9 +83,13 @@ dev-rm-cluster:
 # TODO: enable more e2e tests (currently only running Batches/Lifecycle as a smoke test)
 TEST_RUN ?= TestE2E/Batches/Lifecycle
 
-.PHONY: test-e2e
-test-e2e:
+.PHONY: test-e2e-batch-gateway
+test-e2e-batch-gateway:
 	cd batch-gateway/test/e2e && go test -v -count=1 -run "$(TEST_RUN)" ./...
+
+.PHONY: test-e2e-operator
+test-e2e-operator:
+	cd test/e2e && go test -v -count=1 -timeout 5m ./...
 
 ## Submodule
 

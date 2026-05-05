@@ -357,8 +357,12 @@ func inferenceGatewayToMap(gw *batchv1alpha1.InferenceGatewaySpec) map[string]in
 
 func apiServerConfigToMap(cfg *batchv1alpha1.APIServerConfigSpec) map[string]interface{} {
 	m := map[string]interface{}{}
-	setIfNotEmpty(m, "port", cfg.Port)
-	setIfNotEmpty(m, "observabilityPort", cfg.ObservabilityPort)
+	if cfg.Port != 0 {
+		m["port"] = int64(cfg.Port)
+	}
+	if cfg.ObservabilityPort != 0 {
+		m["observabilityPort"] = int64(cfg.ObservabilityPort)
+	}
 	if cfg.ReadTimeoutSeconds != 0 {
 		m["readTimeoutSeconds"] = int64(cfg.ReadTimeoutSeconds)
 	}

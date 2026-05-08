@@ -2,6 +2,8 @@
 
 A Kubernetes operator that manages the lifecycle of [batch-gateway](https://github.com/opendatahub-io/batch-gateway) deployments. It reconciles a single `LLMBatchGateway` custom resource into the full set of Kubernetes resources by rendering the upstream Helm chart at runtime.
 
+[Design Document](https://docs.google.com/document/d/1cYrR-GRnFEfaG-D2WwJqK5c8m6iq3QHyPHs6KMjou0o/edit?usp=sharing)
+
 ```
 LLMBatchGateway CR
        |

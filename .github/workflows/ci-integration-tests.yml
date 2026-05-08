@@ -13,6 +13,7 @@ on:
       - 'internal/**'
       - 'config/**'
       - 'hack/**'
+      - 'test/**'
       - 'Dockerfile'
       - 'go.mod'
       - 'go.sum'
@@ -48,10 +49,13 @@ jobs:
           OPERATOR_IMG: ${{ env.OPERATOR_IMG }}
           KIND_CLUSTER_NAME: ${{ env.KIND_CLUSTER_NAME }}
 
-      - name: Run integration tests
-        run: make test-e2e
+      - name: Run batch-gateway e2e tests
+        run: make test-e2e-batch-gateway
         env:
           TEST_APISERVER_URL: "http://localhost:8000"
+
+      - name: Run operator e2e tests
+        run: make test-e2e-operator
 
       - name: Cleanup
         if: always()

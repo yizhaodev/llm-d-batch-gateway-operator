@@ -34,6 +34,10 @@ const (
 	ConditionGCAvailable        = "GCAvailable"
 
 	fieldOwner = "llmbatchgateway-controller"
+
+	conditionsStatusField         = "conditions"
+	componentStatusField          = "componentStatus"
+	observedGenerationStatusField = "observedGeneration"
 )
 
 // managedGVKs must be a superset of all GVK types the Helm chart can produce.
@@ -108,8 +112,10 @@ func (r *LLMBatchGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 			})
 		}
 		r.Recorder.Eventf(&gw, corev1.EventTypeWarning, "ValidationFailed", "Spec validation failed: %s", err)
-		if statusErr := r.Status().Update(ctx, &gw); statusErr != nil {
-			return ctrl.Result{}, fmt.Errorf("updating status after validation failure: %w", statusErr)
+		if statusErr := NewStatusPatch(gw.ResourceVersion).
+			Add(conditionsStatusField, gw.Status.Conditions).
+			Apply(ctx, r.Client, &gw); statusErr != nil {
+			return ctrl.Result{}, fmt.Errorf("patching status after validation failure: %w", statusErr)
 		}
 		return ctrl.Result{}, nil
 	}
@@ -135,8 +141,10 @@ func (r *LLMBatchGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 				ObservedGeneration: gw.Generation,
 			})
 			r.Recorder.Eventf(&gw, corev1.EventTypeWarning, reason, "%s", err)
-			if statusErr := r.Status().Update(ctx, &gw); statusErr != nil {
-				return ctrl.Result{}, fmt.Errorf("updating status after %s: %w", reason, statusErr)
+			if statusErr := NewStatusPatch(gw.ResourceVersion).
+				Add(conditionsStatusField, gw.Status.Conditions).
+				Apply(ctx, r.Client, &gw); statusErr != nil {
+				return ctrl.Result{}, fmt.Errorf("patching status after %s: %w", reason, statusErr)
 			}
 			// Permanent error — no requeue. The user must act (create a
 			// ReferenceGrant, or delete+recreate the CR for SecretRefImmutable).
@@ -163,8 +171,10 @@ func (r *LLMBatchGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 			ObservedGeneration: gw.Generation,
 		})
 		r.Recorder.Eventf(&gw, corev1.EventTypeWarning, "RenderFailed", "Helm chart render failed: %s", err)
-		if statusErr := r.Status().Update(ctx, &gw); statusErr != nil {
-			logger.Error(statusErr, "failed to update status after render failure")
+		if statusErr := NewStatusPatch(gw.ResourceVersion).
+			Add(conditionsStatusField, gw.Status.Conditions).
+			Apply(ctx, r.Client, &gw); statusErr != nil {
+			return ctrl.Result{}, fmt.Errorf("rendering chart: %w; also failed to patch status: %w", err, statusErr)
 		}
 		return ctrl.Result{}, fmt.Errorf("rendering chart: %w", err)
 	}
@@ -354,7 +364,11 @@ func (r *LLMBatchGatewayReconciler) updateStatus(ctx context.Context, gw *batchv
 		}
 	}
 
-	return r.Status().Update(ctx, gw)
+	return NewStatusPatch(gw.ResourceVersion).
+		Add(conditionsStatusField, gw.Status.Conditions).
+		Add(componentStatusField, gw.Status.ComponentStatus).
+		Add(observedGenerationStatusField, gw.Status.ObservedGeneration).
+		Apply(ctx, r.Client, gw)
 }
 
 func (r *LLMBatchGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {

@@ -1,3 +1,4 @@
+VERSION ?= $(shell cat VERSION)
 IMG ?= ghcr.io/opendatahub-io/batch-gateway-operator:latest
 CONTROLLER_GEN ?= go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.17.3
 ENVTEST ?= go run sigs.k8s.io/controller-runtime/tools/setup-envtest@release-0.21
@@ -8,7 +9,7 @@ LOCALBIN ?= $(shell pwd)/bin/k8s
 
 .PHONY: build
 build:
-	go build -o bin/manager ./cmd/
+	go build -ldflags "-X main.version=$(VERSION)" -o bin/manager ./cmd/
 
 ## Code Generation
 

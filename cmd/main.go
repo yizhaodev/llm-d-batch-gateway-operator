@@ -18,6 +18,10 @@ import (
 	"github.com/opendatahub-io/llm-d-batch-gateway-operator/internal/controller"
 )
 
+// version is stamped at build time via -ldflags "-X main.version=<version>".
+// It defaults to "dev" when built without the flag (e.g. go run).
+var version = "dev"
+
 var scheme = runtime.NewScheme()
 
 func init() {
@@ -78,7 +82,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	logger.Info("starting manager")
+	logger.Info("starting manager", "version", version)
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		logger.Error(err, "problem running manager")
 		os.Exit(1)

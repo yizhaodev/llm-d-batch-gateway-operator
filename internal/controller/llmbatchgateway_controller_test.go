@@ -228,7 +228,7 @@ func TestReconcile(t *testing.T) {
 			conditionTypes[c.Type] = true
 		}
 
-		for _, ct := range []string{ConditionReady, ConditionAPIServerAvailable, ConditionProcessorAvailable} {
+		for _, ct := range []string{conditionReady, conditionAPIServerAvailable, conditionProcessorAvailable} {
 			if !conditionTypes[ct] {
 				t.Errorf("missing condition %q", ct)
 			}
@@ -380,7 +380,7 @@ func TestReconcile(t *testing.T) {
 			t.Fatalf("getting updated CR: %v", err)
 		}
 
-		for _, condType := range []string{ConditionReady, ConditionAPIServerAvailable, ConditionProcessorAvailable} {
+		for _, condType := range []string{conditionReady, conditionAPIServerAvailable, conditionProcessorAvailable} {
 			found := false
 			for _, c := range updated.Status.Conditions {
 				if c.Type == condType {
@@ -430,7 +430,7 @@ func TestReconcile(t *testing.T) {
 		}
 
 		for _, c := range updated.Status.Conditions {
-			if c.Type == ConditionReady {
+			if c.Type == conditionReady {
 				if c.Status != metav1.ConditionFalse {
 					t.Errorf("Ready status = %v, want False", c.Status)
 				}
@@ -464,7 +464,7 @@ func TestReconcile(t *testing.T) {
 			t.Fatalf("getting updated CR: %v", err)
 		}
 		for _, c := range updated.Status.Conditions {
-			if c.Type == ConditionReady {
+			if c.Type == conditionReady {
 				if c.Status != metav1.ConditionFalse {
 					t.Errorf("Ready status = %v, want False", c.Status)
 				}
@@ -516,7 +516,7 @@ func TestReconcile(t *testing.T) {
 			t.Fatalf("getting updated CR: %v", err)
 		}
 		for _, c := range updated.Status.Conditions {
-			if c.Type == ConditionReady {
+			if c.Type == conditionReady {
 				if c.Status != metav1.ConditionFalse {
 					t.Errorf("Ready status = %v, want False", c.Status)
 				}

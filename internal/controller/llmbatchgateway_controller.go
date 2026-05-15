@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"k8s.io/apimachinery/pkg/util/json"
+
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -189,7 +191,7 @@ func (r *LLMBatchGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 			return ctrl.Result{}, fmt.Errorf("setting owner reference on %s/%s: %w", obj.GetKind(), obj.GetName(), err)
 		}
 
-		if err := r.Patch(ctx, obj, client.Apply, client.FieldOwner(fieldOwner), client.ForceOwnership); err != nil {
+		if err := serverSideApply(ctx, r.Client, obj, fieldOwner); err != nil {
 			if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
 				logger.V(1).Info("skipping resource (CRD not installed)", "kind", obj.GetKind(), "name", obj.GetName())
 				continue
@@ -491,6 +493,15 @@ func conditionMessage(ok bool, trueMsg, falseMsg string) string {
 		return trueMsg
 	}
 	return falseMsg
+}
+
+// serverSideApply marshals obj to JSON and applies it via server-side apply.
+func serverSideApply(ctx context.Context, c client.Client, obj client.Object, fieldOwner string) error {
+	data, err := json.Marshal(obj)
+	if err != nil {
+		return fmt.Errorf("marshalling: %w", err)
+	}
+	return c.Patch(ctx, obj, client.RawPatch(types.ApplyPatchType, data), client.FieldOwner(fieldOwner), client.ForceOwnership)
 }
 
 var _ reconcile.Reconciler = (*LLMBatchGatewayReconciler)(nil)
